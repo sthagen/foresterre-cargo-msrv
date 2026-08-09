@@ -20,41 +20,53 @@ extern crate core;
 #[macro_use]
 extern crate tracing;
 
-pub use crate::context::{Context, OutputFormat, TracingOptions, TracingTargetOption};
 pub use crate::outcome::Compatibility;
 pub use crate::sub_command::{Find, List, Set, Show, SubCommand, Verify};
+pub use cargo_msrv_context::types::{OutputFormat, TracingTargetOption};
+pub use cargo_msrv_context::{Context, TracingOptions};
 
-use crate::compatibility::RustupToolchainCheck;
-use crate::context::ReleaseSource;
+use crate::compatibility::{RunCommandProvider, RustupToolchainCheck};
 use crate::error::{CargoMSRVError, TResult};
+use crate::reporter::Reporter;
 use crate::reporter::event::{Meta, SelectedPackages, SubcommandInit};
-use crate::reporter::{Event, Reporter};
 use rust::release_index;
 use rust_releases::semver;
 
-pub mod cli;
+pub use cargo_msrv_cli::cli;
+pub use cargo_msrv_context::context;
+pub use cargo_msrv_manifest as manifest;
+pub use cargo_msrv_reporter as reporter;
+pub use cargo_msrv_reporter::{io, typed_bool};
+
 pub mod compatibility;
 
-pub mod context;
 pub mod dependency_graph;
 pub mod error;
 pub mod exit_code;
 mod external_command;
-pub mod io;
 pub mod lockfile;
-pub mod log_level;
-pub mod manifest;
 pub mod msrv;
 pub mod outcome;
-pub mod reporter;
 pub mod rust;
 pub mod search_method;
 pub mod sub_command;
-pub mod typed_bool;
 pub mod writer;
 
+const UNKNOWN_VERSION: &str = "?";
+
+fn meta() -> Meta {
+    Meta::new(
+        option_env!("CARGO_PKG_NAME").unwrap_or("cargo-msrv"),
+        option_env!("CARGO_PKG_VERSION").unwrap_or(UNKNOWN_VERSION),
+        option_env!("VERGEN_GIT_SHA"),
+        option_env!("VERGEN_CARGO_TARGET_TRIPLE"),
+        option_env!("VERGEN_CARGO_FEATURES"),
+        option_env!("VERGEN_RUSTC_SEMVER"),
+    )
+}
+
 pub fn run_app(ctx: &Context, reporter: &impl Reporter) -> TResult<()> {
-    reporter.report_event(Meta::default())?;
+    reporter.report_event(meta())?;
     reporter.report_event(SelectedPackages::new(
         ctx.environment_context().workspace_packages.selected(),
     ))?;
@@ -70,7 +82,7 @@ pub fn run_app(ctx: &Context, reporter: &impl Reporter) -> TResult<()> {
                 ctx.no_check_feedback,
                 ctx.skip_unavailable_toolchains,
                 &ctx.environment,
-                ctx.run_command(),
+                ctx.provide_run_command(),
             );
             Find::new(&index, runner).run(ctx, reporter)?;
         }
@@ -93,7 +105,7 @@ pub fn run_app(ctx: &Context, reporter: &impl Reporter) -> TResult<()> {
                 ctx.no_check_feedback,
                 false,
                 &ctx.environment,
-                ctx.run_command(),
+                ctx.provide_run_command(),
             );
 
             Verify::new(&index, runner).run(ctx, reporter)?;

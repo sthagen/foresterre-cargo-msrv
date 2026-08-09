@@ -1,16 +1,20 @@
 use camino::Utf8PathBuf;
 use owo_colors::OwoColorize;
 use std::env;
-use std::ffi::OsString;
-use std::io;
-use std::path::PathBuf;
 use std::string::FromUtf8Error;
 
-use crate::cli::rust_releases_opts::{ParseEditionError, ParseEditionOrVersionError};
-use crate::log_level::ParseLogLevelError;
+use crate::cli::rust_releases_opts::ParseEditionOrVersionError;
 use crate::manifest::ManifestParseError;
-use crate::manifest::bare_version::{BareVersion, NoVersionMatchesManifestMsrvError};
+use cargo_msrv_context::types::{
+    ParseEditionError, ParseListMsrvVariantError, ParseLogLevelError, ParseOutputFormatError,
+    ParseReleaseSourceError, ParseTracingTargetOptionError,
+};
+use cargo_msrv_types::{BareVersion, NoVersionMatchesManifestMsrvError};
 use rust_releases::Release;
+
+pub use cargo_msrv_context::context::error::{
+    Error as ContextError, InvalidUtf8Error, IoError, IoErrorSource, PathError,
+};
 
 use crate::sub_command::{show, verify};
 
@@ -19,13 +23,13 @@ pub(crate) type TResult<T> = Result<T, CargoMSRVError>;
 #[derive(Debug, thiserror::Error)]
 pub enum CargoMSRVError {
     #[error("Unable to parse minimum rust version: {0}")]
-    BareVersionParse(#[from] crate::manifest::bare_version::Error),
+    BareVersionParse(#[from] cargo_msrv_types::bare_version::Error),
 
     #[error(transparent)]
     CargoMetadata(#[from] cargo_metadata::Error),
 
-    #[error("The default host triple (target) could not be found.")]
-    DefaultHostTripleNotFound,
+    #[error(transparent)]
+    Context(#[from] ContextError),
 
     #[error(transparent)]
     Env(#[from] env::VarError),
@@ -65,9 +69,6 @@ pub enum CargoMSRVError {
 
     #[error(transparent)]
     NoVersionMatchesManifestMSRV(#[from] NoVersionMatchesManifestMsrvError),
-
-    #[error("Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in '{0}'")]
-    NoMSRVKeyInCargoToml(Utf8PathBuf),
 
     #[error(transparent)]
     ParseEdition(#[from] ParseEditionError),
@@ -156,44 +157,47 @@ Thank you in advance!"#
     Path(#[from] PathError),
 }
 
+impl CargoMSRVError {
+    pub fn should_highlight(&self) -> bool {
+        matches!(
+            self,
+            Self::UnableToFindAnyGoodVersion { .. } | Self::InvalidMsrvSet(_)
+        )
+    }
+}
+
 impl From<String> for CargoMSRVError {
     fn from(s: String) -> Self {
         Self::GenericMessage(s)
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("IO error: '{error}'. caused by: '{source}'.")]
-pub struct IoError {
-    pub error: io::Error,
-    pub source: IoErrorSource,
+// The values of the command line options are parsed by the `cargo-msrv-cli` crate, which has its
+// own, self contained errors. The conversions below keep these errors reportable as a
+// `CargoMSRVError`.
+
+impl From<ParseListMsrvVariantError> for CargoMSRVError {
+    fn from(error: ParseListMsrvVariantError) -> Self {
+        Self::InvalidConfig(error.to_string())
+    }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum IoErrorSource {
-    #[error("Unable to determine current working directory")]
-    CurrentDir,
+impl From<ParseOutputFormatError> for CargoMSRVError {
+    fn from(error: ParseOutputFormatError) -> Self {
+        Self::InvalidConfig(error.to_string())
+    }
+}
 
-    #[error("Unable to open file '{0}'")]
-    OpenFile(Utf8PathBuf),
+impl From<ParseReleaseSourceError> for CargoMSRVError {
+    fn from(error: ParseReleaseSourceError) -> Self {
+        Self::RustReleasesSourceParseError(error.0)
+    }
+}
 
-    #[error("Unable to read file '{0}'")]
-    ReadFile(Utf8PathBuf),
-
-    #[error("Unable to write file '{0}'")]
-    WriteFile(Utf8PathBuf),
-
-    #[error("Unable to remove file '{0}'")]
-    RemoveFile(Utf8PathBuf),
-
-    #[error("Unable to rename file '{0}'")]
-    RenameFile(Utf8PathBuf),
-
-    #[error("Unable to spawn process '{0:?}'")]
-    SpawnProcess(OsString),
-
-    #[error("Unable to collect output from '{0:?}', or process did not terminate properly")]
-    WaitForProcessAndCollectOutput(OsString),
+impl From<ParseTracingTargetOptionError> for CargoMSRVError {
+    fn from(error: ParseTracingTargetOptionError) -> Self {
+        Self::InvalidConfig(error.to_string())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -244,7 +248,7 @@ pub struct NoToolchainToTryClues {
 #[derive(Debug, thiserror::Error)]
 #[error("No Rust releases match input '{}' (search space: [{}])",
     input,
-    search_space.iter().map(|r| r.version().to_string()).collect::<Vec<_>>().join(", ") )
+    search_space.iter().map(|r| r.version().to_string()).collect::<Vec<_>>().join(", "))
 ]
 pub struct InvalidMsrvSetError {
     pub(crate) input: BareVersion,
@@ -300,48 +304,6 @@ pub struct RustupAddTargetError {
     pub targets: String,
     pub toolchain_spec: String,
     pub stderr: String,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum PathError {
-    #[error("'{}' does not exist", .0.display())]
-    DoesNotExist(PathBuf),
-
-    #[error("No parent directory for '{}'", .0.display())]
-    NoParent(PathBuf),
-
-    #[error(transparent)]
-    InvalidUtf8(#[from] InvalidUtf8Error),
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error(transparent)]
-pub struct InvalidUtf8Error {
-    error: Utf8PathErrorInner,
-}
-
-impl From<camino::FromPathError> for InvalidUtf8Error {
-    fn from(value: camino::FromPathError) -> Self {
-        Self {
-            error: Utf8PathErrorInner::FromPath(value),
-        }
-    }
-}
-
-impl From<camino::FromPathBufError> for InvalidUtf8Error {
-    fn from(value: camino::FromPathBufError) -> Self {
-        Self {
-            error: Utf8PathErrorInner::FromPathBuf(value),
-        }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum Utf8PathErrorInner {
-    #[error("Path contains non UTF-8 characters")]
-    FromPath(camino::FromPathError),
-    #[error("Path contains non UTF-8 characters (path: '{}')", .0.as_path().display())]
-    FromPathBuf(camino::FromPathBufError),
 }
 
 #[derive(Debug, thiserror::Error)]

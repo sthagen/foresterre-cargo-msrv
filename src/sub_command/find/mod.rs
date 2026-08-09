@@ -1,9 +1,8 @@
 use rust_releases::{Release, ReleaseIndex};
 
-use crate::compatibility::IsCompatible;
+use crate::compatibility::{IsCompatible, RunCommandProvider};
 use crate::context::{FindContext, SearchMethod};
 use crate::error::{CargoMSRVError, NoToolchainsToTryError, TResult};
-use crate::manifest::bare_version::BareVersion;
 use crate::msrv::MinimumSupportedRustVersion;
 use crate::reporter::Reporter;
 use crate::reporter::event::FindResult;
@@ -13,6 +12,7 @@ use crate::search_method::{Bisect, FindMinimalSupportedRustVersion, Linear};
 use crate::writer::toolchain_file::write_toolchain_file;
 use crate::writer::write_msrv::write_msrv;
 use crate::{SubCommand, semver};
+use cargo_msrv_types::BareVersion;
 
 pub struct Find<'index, C: IsCompatible> {
     release_index: &'index ReleaseIndex,
@@ -50,7 +50,7 @@ fn find_msrv(
             info!("no minimal-compatible toolchain found");
 
             Err(CargoMSRVError::UnableToFindAnyGoodVersion {
-                command: ctx.run_command().components().join(" "),
+                command: ctx.provide_run_command().components().join(" "),
             })
         }
         MinimumSupportedRustVersion::Toolchain { toolchain } => {

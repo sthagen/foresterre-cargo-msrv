@@ -70,12 +70,13 @@ channel = "{}"
 mod write_toolchain_file_tests {
     use super::IoError;
     use crate::error::IoErrorSource;
+    use crate::reporter::Event;
     use crate::reporter::event::{
         AuxiliaryOutput, AuxiliaryOutputItem, Destination, ToolchainFileKind,
     };
     use crate::reporter::{FakeTestReporter, TestReporterWrapper};
     use crate::writer::toolchain_file::write_toolchain_file;
-    use crate::{CargoMSRVError, Event, semver};
+    use crate::{CargoMSRVError, semver};
     use assert_fs::prelude::*;
     use camino::{Utf8Path, Utf8PathBuf};
 
@@ -298,7 +299,7 @@ mod format_toolchain_file_tests {
     #[yare::parameterized(
         str_value = { Box::new("1.36.0") },
         semver = { Box::new(crate::semver::Version::new(1, 36, 0)) },
-        bare_version = { Box::new(crate::manifest::bare_version::BareVersion::ThreeComponents(1, 36, 0))},
+        bare_version = { Box::new(cargo_msrv_types::BareVersion::ThreeComponents(1, 36, 0))},
     )]
     fn values_which_impl_display(channel: Box<dyn fmt::Display>) {
         let content = format_toolchain_file(&channel);
