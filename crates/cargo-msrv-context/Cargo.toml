@@ -13,22 +13,26 @@ keywords = ["msrv", "rust-version", "cargo-msrv", "context", "minimum"]
 categories = ["development-tools", "development-tools::cargo-plugins"]
 
 [dependencies]
-cargo-msrv-manifest = { workspace = true }
+cargo-msrv-rust-tools = { workspace = true }
 cargo-msrv-types = { workspace = true }
 
 camino = { workspace = true }
 cargo_metadata = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
-toml_edit = { workspace = true }
 tracing = { workspace = true }
+version-number = { workspace = true }
 
 [dev-dependencies]
+assert_fs = { workspace = true }
 yare = { workspace = true }
 
 [features]
+# Enables the `rust-changelog` release source
+rust-releases-changelog-source = []
+
 # Enables the `rust-dist` release source
 rust-releases-dist-source = []
 
-# Enables the `offline` release source
-rust-releases-offline-source = []
+# Enables the `github` release source
+rust-releases-github-source = []

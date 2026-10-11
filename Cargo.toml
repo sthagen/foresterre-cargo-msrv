@@ -7,7 +7,7 @@ license = { workspace = true }
 edition = { workspace = true }
 repository = { workspace = true }
 
-rust-version = "1.96.0"
+rust-version = "1.96"
 
 keywords = ["msrv", "rust-version", "toolchain", "find", "minimum"]
 categories = ["development-tools", "development-tools::cargo-plugins", "command-line-utilities"]
@@ -24,19 +24,16 @@ tag-name = "v{{version}}"
 # workspace
 cargo-msrv-cli = { workspace = true } # the command line interface
 cargo-msrv-context = { workspace = true } # the resolved configuration of a run
-cargo-msrv-manifest = { workspace = true } # the Cargo manifest parsing
 cargo-msrv-reporter = { workspace = true } # the user facing output
 cargo-msrv-rust-releases = { workspace = true } # the index of available rust releases
+cargo-msrv-rust-tools = { workspace = true } # the cargo and rustup tooling, Cargo manifest parsing and dependency graph
+cargo-msrv-search = { workspace = true } # the msrv search methods and toolchain compatibility check
 cargo-msrv-types = { workspace = true } # the types shared with the command line interface
 
 # external
-bisector = "0.4.0" # bisection with a custom comparator
 camino = { workspace = true } # utf-8 paths
 cargo_metadata = { workspace = true } # resolving Cargo manifest metadata (consider `guppy`!)
-ctrlc = "3.5.1" # interrupt handling
 dirs = "6.0.0" # common directories
-dunce = { workspace = true } # better canonicalize for Windows
-owo-colors = { workspace = true } # color support for the terminal
 semver = { workspace = true } # the version numbers of the rust releases
 storyteller = { workspace = true } # minimal multi user output architecture
 thiserror = { workspace = true } # error handling
@@ -44,9 +41,11 @@ toml_edit = { workspace = true } # read and write the Cargo.toml
 tracing = { workspace = true } # tracing
 tracing-appender = "0.2" # tracing
 tracing-subscriber = { version = "0.3", features = ["json"] }
+version-number = { workspace = true }
 
 [dev-dependencies]
 cargo-msrv-reporter = { workspace = true, features = ["testing"] }
+cargo-msrv-search = { workspace = true, features = ["testing"] }
 
 assert_fs = "1.1.3"
 yare = { workspace = true }
@@ -61,18 +60,24 @@ vergen-gitcl = { version = "10.0.2", default-features = false }
 # ~~~ features ~~~
 
 [features]
-default = ["rust-releases-dist-source", "rust-releases-offline-source"]
+default = ["rust-releases-changelog-source", "rust-releases-dist-source", "rust-releases-github-source"]
+rust-releases-changelog-source = [
+    "cargo-msrv-cli/rust-releases-changelog-source",
+    "cargo-msrv-context/rust-releases-changelog-source",
+    "cargo-msrv-reporter/rust-releases-changelog-source",
+    "cargo-msrv-rust-releases/rust-releases-changelog-source",
+]
 rust-releases-dist-source = [
     "cargo-msrv-cli/rust-releases-dist-source",
     "cargo-msrv-context/rust-releases-dist-source",
     "cargo-msrv-reporter/rust-releases-dist-source",
     "cargo-msrv-rust-releases/rust-releases-dist-source",
 ]
-rust-releases-offline-source = [
-    "cargo-msrv-cli/rust-releases-offline-source",
-    "cargo-msrv-context/rust-releases-offline-source",
-    "cargo-msrv-reporter/rust-releases-offline-source",
-    "cargo-msrv-rust-releases/rust-releases-offline-source",
+rust-releases-github-source = [
+    "cargo-msrv-cli/rust-releases-github-source",
+    "cargo-msrv-context/rust-releases-github-source",
+    "cargo-msrv-reporter/rust-releases-github-source",
+    "cargo-msrv-rust-releases/rust-releases-github-source",
 ]
 
 # ~~~ workspace ~~~
@@ -81,31 +86,34 @@ rust-releases-offline-source = [
 members = [
     "crates/cargo-msrv-cli",
     "crates/cargo-msrv-context",
-    "crates/cargo-msrv-manifest",
     "crates/cargo-msrv-reporter",
     "crates/cargo-msrv-rust-releases",
+    "crates/cargo-msrv-rust-tools",
+    "crates/cargo-msrv-search",
     "crates/cargo-msrv-types",
     "crates/msrv",
 ]
 
 [workspace.package]
-version = "0.19.3"
+version = "0.20.0-beta.2"
 authors = ["Martijn Gribnau <garm@ilumeo.com>"]
 license = "Apache-2.0 OR MIT"
 edition = "2024"
 repository = "https://github.com/foresterre/cargo-msrv"
 
 [workspace.dependencies]
-cargo-msrv-cli = { path = "crates/cargo-msrv-cli", version = "0.19.3" }
-cargo-msrv-context = { path = "crates/cargo-msrv-context", version = "0.19.3" }
-cargo-msrv-manifest = { path = "crates/cargo-msrv-manifest", version = "0.19.3" }
-cargo-msrv-reporter = { path = "crates/cargo-msrv-reporter", version = "0.19.3" }
-cargo-msrv-rust-releases = { path = "crates/cargo-msrv-rust-releases", version = "0.19.3" }
-cargo-msrv-types = { path = "crates/cargo-msrv-types", version = "0.19.3" }
+cargo-msrv-cli = { path = "crates/cargo-msrv-cli", version = "0.20.0-beta.2" }
+cargo-msrv-context = { path = "crates/cargo-msrv-context", version = "0.20.0-beta.2" }
+cargo-msrv-reporter = { path = "crates/cargo-msrv-reporter", version = "0.20.0-beta.2" }
+cargo-msrv-rust-releases = { path = "crates/cargo-msrv-rust-releases", version = "0.20.0-beta.2" }
+cargo-msrv-rust-tools = { path = "crates/cargo-msrv-rust-tools", version = "0.20.0-beta.2" }
+cargo-msrv-search = { path = "crates/cargo-msrv-search", version = "0.20.0-beta.2" }
+cargo-msrv-types = { path = "crates/cargo-msrv-types", version = "0.20.0-beta.2" }
 
+assert_fs = "1.1.4"
 camino = "1.2"
 cargo_metadata = "0.23.1"
-clap = { version = "4.6.0", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive", "env"] }
 clap-cargo = { version = "0.18.3", features = ["cargo_metadata"] }
 dunce = "1.0.5"
 indoc = "2.0.7"
@@ -120,6 +128,7 @@ storyteller = "2.0.0-beta.1"
 thiserror = "2.0.18"
 toml_edit = "0.25.5"
 tracing = "0.1"
+version-number = "1.0.0"
 yare = "3.0.0"
 
 # ~~~ profile ~~~

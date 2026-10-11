@@ -1,19 +1,31 @@
 use crate::types::ParseEditionError;
 use camino::Utf8PathBuf;
-use cargo_msrv_manifest::ManifestParseError;
-use std::ffi::OsString;
-use std::io;
+use cargo_msrv_rust_tools::ManifestParseError;
 use std::path::PathBuf;
+
+pub use cargo_msrv_types::{IoError, IoErrorSource};
 
 pub type TResult<T> = Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    CargoMetadata(#[from] cargo_metadata::Error),
+    #[error("Unable to read the Cargo workspace at '{path}': {source}")]
+    CargoMetadata {
+        path: Utf8PathBuf,
+        source: cargo_metadata::Error,
+    },
+
+    #[error("The '{flag}' flag requires a Cargo project, but no Cargo.toml was found at '{root}'")]
+    CargoFlagWithoutCargoProject {
+        flag: &'static str,
+        root: Utf8PathBuf,
+    },
 
     #[error("The default host triple (target) could not be found.")]
     DefaultHostTripleNotFound,
+
+    #[error("No packages selected. Did `--exclude` remove every workspace member?")]
+    EmptySelection,
 
     #[error(transparent)]
     Io(#[from] IoError),
@@ -21,51 +33,53 @@ pub enum Error {
     #[error(transparent)]
     ManifestParseError(#[from] ManifestParseError),
 
-    #[error("Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in '{0}'")]
-    NoMSRVKeyInCargoToml(Utf8PathBuf),
+    #[error(
+        "No Cargo.toml manifest found at '{0}'. Use '--rust-version <VERSION>' to verify projects which don't use cargo."
+    )]
+    NoCargoManifest(Utf8PathBuf),
+
+    #[error("{}", format_without_msrv(.0))]
+    NoMSRVKeyInCargoToml(Vec<PackageWithoutMsrv>),
+
+    #[error(
+        "The selected packages have different MSRVs, but a custom check command runs once for all of them. Use '--rust-version <VERSION>', or select a single package with '--package <NAME>'."
+    )]
+    MixedMSRVs,
 
     #[error(transparent)]
     ParseEdition(#[from] ParseEditionError),
 
-    #[error("Unable to parse Cargo.toml: {0}")]
-    ParseToml(#[from] toml_edit::TomlError),
-
     #[error(transparent)]
     Path(#[from] PathError),
+
+    #[error("Package '{0}' is not a member of this workspace")]
+    UnknownPackage(String),
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("IO error: '{error}'. caused by: '{source}'.")]
-pub struct IoError {
-    pub error: io::Error,
-    pub source: IoErrorSource,
+#[derive(Debug)]
+pub struct PackageWithoutMsrv {
+    pub name: String,
+    pub manifest_path: Utf8PathBuf,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum IoErrorSource {
-    #[error("Unable to determine current working directory")]
-    CurrentDir,
-
-    #[error("Unable to open file '{0}'")]
-    OpenFile(Utf8PathBuf),
-
-    #[error("Unable to read file '{0}'")]
-    ReadFile(Utf8PathBuf),
-
-    #[error("Unable to write file '{0}'")]
-    WriteFile(Utf8PathBuf),
-
-    #[error("Unable to remove file '{0}'")]
-    RemoveFile(Utf8PathBuf),
-
-    #[error("Unable to rename file '{0}'")]
-    RenameFile(Utf8PathBuf),
-
-    #[error("Unable to spawn process '{0:?}'")]
-    SpawnProcess(OsString),
-
-    #[error("Unable to collect output from '{0:?}', or process did not terminate properly")]
-    WaitForProcessAndCollectOutput(OsString),
+fn format_without_msrv(packages: &[PackageWithoutMsrv]) -> String {
+    match packages {
+        [package] => format!(
+            "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in '{}'",
+            package.manifest_path
+        ),
+        packages => format!(
+            "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') for {} packages: {}. \
+             Use '--rust-version <VERSION>' to verify them against a single version, \
+             or leave them out with '--exclude <NAME>'.",
+            packages.len(),
+            packages
+                .iter()
+                .map(|p| format!("'{}' ('{}')", p.name, p.manifest_path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

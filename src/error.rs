@@ -1,22 +1,29 @@
 use camino::Utf8PathBuf;
-use owo_colors::OwoColorize;
 use std::env;
 use std::string::FromUtf8Error;
 
 use crate::cli::rust_releases_opts::ParseEditionOrVersionError;
-use crate::manifest::ManifestParseError;
 use cargo_msrv_context::types::{
     ParseEditionError, ParseListMsrvVariantError, ParseLogLevelError, ParseOutputFormatError,
     ParseReleaseSourceError, ParseTracingTargetOptionError,
 };
-use cargo_msrv_rust_releases::FetchIndexError;
-use cargo_msrv_types::{BareVersion, NoVersionMatchesManifestMsrvError};
-
-use crate::rust::{ExcludedRelease, RustRelease, Stable};
+use cargo_msrv_rust_releases::{
+    FetchIndexError, NoVersionMatchesManifestMsrvError, RustRelease, Stable,
+};
+use version_number::Version;
 
 pub use cargo_msrv_context::context::error::{
     Error as ContextError, InvalidUtf8Error, IoError, IoErrorSource, PathError,
 };
+use cargo_msrv_rust_tools::{
+    CargoMetadataResolveError, ManifestParseError, WriteManifestMsrvError,
+};
+pub use cargo_msrv_search::error::{
+    LockfileHandlerError, NoToolchainsToTryError, RustupAddComponentError, RustupAddTargetError,
+    RustupError, RustupInstallError,
+};
+
+use cargo_msrv_search::error::Error as SearchError;
 
 use crate::sub_command::{show, verify};
 
@@ -25,7 +32,7 @@ pub(crate) type TResult<T> = Result<T, CargoMSRVError>;
 #[derive(Debug, thiserror::Error)]
 pub enum CargoMSRVError {
     #[error("Unable to parse minimum rust version: {0}")]
-    BareVersionParse(#[from] cargo_msrv_types::bare_version::Error),
+    VersionParse(#[from] version_number::Error),
 
     #[error(transparent)]
     CargoMetadata(#[from] cargo_metadata::Error),
@@ -51,6 +58,12 @@ pub enum CargoMSRVError {
     #[error(transparent)]
     InvalidRustVersionNumber(#[from] std::num::ParseIntError),
 
+    #[error(
+        "Package '{package}' inherits its MSRV from the workspace. \
+         Use `cargo msrv set --workspace-msrv <version>` to change it for all members."
+    )]
+    InheritedMsrv { package: String },
+
     #[error(transparent)]
     InvalidMsrvSet(#[from] InvalidMsrvSetError),
 
@@ -69,8 +82,15 @@ pub enum CargoMSRVError {
     #[error(transparent)]
     NoToolchainsToTry(#[from] NoToolchainsToTryError),
 
-    #[error("Unable to set MSRV for workspace, try setting it for individual packages instead.")]
+    #[error(
+        "Unable to set the MSRV for a virtual workspace manifest. \
+         Use `cargo msrv set --workspace-msrv <version>` to set it for all members, \
+         or select a package with `--package <name>`."
+    )]
     WorkspaceFound,
+
+    #[error("Unable to set the MSRV in the workspace root: no [workspace] table found in '{0}'")]
+    NoWorkspaceTable(Utf8PathBuf),
 
     #[error(transparent)]
     NoVersionMatchesManifestMSRV(#[from] NoVersionMatchesManifestMsrvError),
@@ -133,14 +153,15 @@ pub enum CargoMSRVError {
     #[error(
         r#"Unable to find a Minimum Supported Rust Version (MSRV).
 
-If you think this result is erroneous, please run: `{command}` manually.
+If you think this result is erroneous, please run: `{}` manually.
 
 If the above does succeed, or you think cargo-msrv errored in another way, please feel free to
 report the issue at: https://github.com/foresterre/cargo-msrv/issues
 
-Thank you in advance!"#
+Thank you in advance!"#,
+        .commands.join("`, `")
     )]
-    UnableToFindAnyGoodVersion { command: String },
+    UnableToFindAnyGoodVersion { commands: Vec<String> },
 
     #[error("Unable to parse the CLI arguments. Use `cargo msrv help` for more info.")]
     UnableToParseCliArgs,
@@ -207,99 +228,12 @@ pub enum SetMsrvError {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("No Rust releases to check: the filtered search space is empty.{}{}",
-    inner.as_ref().map(|clues| format!("{}", clues)).unwrap_or_default(),
-    unavailable.as_ref().map(|info| format!("{}", info)).unwrap_or_default(),
-)]
-pub struct NoToolchainsToTryError {
-    inner: Option<SelectedMinMaxVersion>,
-    unavailable: Option<Box<UnavailableToolchainDetails>>,
-}
-
-impl NoToolchainsToTryError {
-    pub fn new_empty() -> Self {
-        Self {
-            inner: None,
-            unavailable: None,
-        }
-    }
-
-    pub fn with_details(user_min: Option<BareVersion>, user_max: Option<BareVersion>) -> Self {
-        Self {
-            inner: Some(SelectedMinMaxVersion {
-                min: user_min,
-                max: user_max,
-            }),
-            unavailable: None,
-        }
-    }
-
-    pub fn with_unavailable_toolchains(
-        mut self,
-        target: &str,
-        components: &[&str],
-        excluded: &[ExcludedRelease],
-    ) -> Self {
-        self.unavailable = Some(Box::new(UnavailableToolchainDetails {
-            target: target.to_string(),
-            components: components.iter().map(|c| c.to_string()).collect(),
-            excluded: excluded.to_vec(),
-        }));
-
-        self
-    }
-
-    pub fn has_clues(&self) -> bool {
-        self.inner.is_some() || self.unavailable.is_some()
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error(" Search space limited by user to min Rust '{}', and max Rust '{}'",
-    min.as_ref().map(|s| format!("{}", s)).unwrap_or_else(|| "<not overridden>".to_string()),
-    max.as_ref().map(|s| format!("{}", s)).unwrap_or_else(|| "<not overridden>".to_string()),
-)]
-pub struct SelectedMinMaxVersion {
-    min: Option<BareVersion>,
-    max: Option<BareVersion>,
-}
-
-const UNAVAILABLE_EXAMPLES: usize = 3;
-
-#[derive(Debug, thiserror::Error)]
-#[error(" Excluded {} release(s) which do not provide the requested toolchain (target '{}'{}): {}",
-    excluded.len(),
-    target,
-    if components.is_empty() { String::new() } else { format!(", component(s) '{}'", components.join(", ")) },
-    format_excluded(excluded),
-)]
-pub struct UnavailableToolchainDetails {
-    target: String,
-    components: Vec<String>,
-    excluded: Vec<ExcludedRelease>,
-}
-
-fn format_excluded(excluded: &[ExcludedRelease]) -> String {
-    let examples = excluded
-        .iter()
-        .take(UNAVAILABLE_EXAMPLES)
-        .map(|release| format!("Rust {} ({})", release.version(), release.reason()))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    match excluded.len().saturating_sub(UNAVAILABLE_EXAMPLES) {
-        0 => examples,
-        remainder => format!("{}, and {} more", examples, remainder),
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
 #[error("No Rust releases match input '{}' (search space: [{}])",
     input,
     search_space.iter().map(|r| r.version().version.to_string()).collect::<Vec<_>>().join(", "))
 ]
 pub struct InvalidMsrvSetError {
-    pub(crate) input: BareVersion,
+    pub(crate) input: Version,
     pub(crate) search_space: Vec<RustRelease<Stable>>,
 }
 
@@ -309,51 +243,43 @@ impl<T> From<storyteller::EventReporterError<T>> for CargoMSRVError {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error(transparent)]
-pub enum RustupError {
-    Install(#[from] RustupInstallError),
-    AddComponent(#[from] RustupAddComponentError),
-    AddTarget(#[from] RustupAddTargetError),
+// The MSRV search and the toolchain compatibility check are provided by the `cargo-msrv-search`
+// crate, which has its own, self contained errors. The conversion below keeps these errors
+// reportable as a `CargoMSRVError`.
+
+impl From<SearchError> for CargoMSRVError {
+    fn from(error: SearchError) -> Self {
+        match error {
+            SearchError::Io(error) => Self::Io(error),
+            SearchError::LockfileHandler(error) => Self::LockfileHandler(error),
+            SearchError::NoToolchainsToTry(error) => Self::NoToolchainsToTry(error),
+            SearchError::Rustup(error) => Self::RustupError(error),
+            SearchError::Storyteller => Self::Storyteller,
+            SearchError::UnableToRunCheck { command, cwd } => {
+                Self::UnableToRunCheck { command, cwd }
+            }
+        }
+    }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Unable to install toolchain '{}', rustup reported:\n    {}",
-    toolchain_spec,
-    stderr.trim_end().lines().collect::<Vec<_>>().join("\n    ").dimmed()
-)]
-pub struct RustupInstallError {
-    pub toolchain_spec: String,
-    pub stderr: String,
+impl From<CargoMetadataResolveError> for CargoMSRVError {
+    fn from(error: CargoMetadataResolveError) -> Self {
+        match error {
+            CargoMetadataResolveError::CargoMetadata(error) => Self::CargoMetadata(error),
+            CargoMetadataResolveError::NoCrateRootFound => Self::NoCrateRootFound,
+        }
+    }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Unable to add components '{}' to toolchain '{}', rustup reported:\n    {}",
-    components,
-    toolchain_spec,
-    stderr.trim_end().lines().collect::<Vec<_>>().join("\n    ").dimmed()
-)]
-pub struct RustupAddComponentError {
-    pub components: String,
-    pub toolchain_spec: String,
-    pub stderr: String,
+impl From<WriteManifestMsrvError> for CargoMSRVError {
+    fn from(error: WriteManifestMsrvError) -> Self {
+        match error {
+            WriteManifestMsrvError::Io(error) => Self::Io(error),
+            WriteManifestMsrvError::ParseToml(error) => Self::ParseToml(error),
+            WriteManifestMsrvError::WorkspaceFound => Self::WorkspaceFound,
+            WriteManifestMsrvError::InheritedMsrv { package } => Self::InheritedMsrv { package },
+            WriteManifestMsrvError::NoWorkspaceTable(path) => Self::NoWorkspaceTable(path),
+            WriteManifestMsrvError::NotATable => Self::SetMsrv(SetMsrvError::NotATable),
+        }
+    }
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Unable to add target '{}' to toolchain '{}', rustup reported:\n    {}",
-    targets,
-    toolchain_spec,
-    stderr.trim_end().lines().collect::<Vec<_>>().join("\n    ").dimmed()
-)]
-pub struct RustupAddTargetError {
-    pub targets: String,
-    pub toolchain_spec: String,
-    pub stderr: String,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("Unable to set cleanup handler for lockfile")]
-pub struct LockfileHandlerError;

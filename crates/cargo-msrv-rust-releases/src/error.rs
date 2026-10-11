@@ -1,11 +1,22 @@
 #[derive(Debug, thiserror::Error)]
 pub enum FetchIndexError {
     #[error(transparent)]
+    #[cfg(feature = "rust-releases-changelog-source")]
     RustReleasesSource(
         #[from] rust_releases::RustChangelogError<rust_releases::HttpCachedClientError>,
     ),
 
     #[error(transparent)]
+    #[cfg(feature = "rust-releases-github-source")]
+    RustReleasesGithubSource(
+        #[from] rust_releases::GithubReleasesError<rust_releases::HttpCachedClientError>,
+    ),
+
+    #[error(transparent)]
+    #[cfg(any(
+        feature = "rust-releases-changelog-source",
+        feature = "rust-releases-github-source"
+    ))]
     RustReleasesCacheDir(#[from] rust_releases::BaseCacheDirError),
 
     #[error(transparent)]
